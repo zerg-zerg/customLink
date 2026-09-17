@@ -3,167 +3,292 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>iOS Custom Link Checker</title>
+    <title>Поиск приложения</title>
     <style>
+      :root {
+        font-family: Arial, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
       body {
-        font-family: system-ui, sans-serif;
+        background: #fff;
         margin: 0;
-        padding: 24px;
       }
-
-      main {
-        margin: 0 auto;
-        max-width: 640px;
+      .screen {
+        display: flex;
+        flex-direction: column;
+        min-height: 100dvh;
+        padding: 60px 24px 24px;
       }
-
-      code {
-        overflow-wrap: anywhere;
+      .logo {
+        align-self: center;
+        height: 30px;
+        width: 93px;
+      }
+      .content {
+        align-items: center;
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        justify-content: flex-end;
+        text-align: center;
+      }
+      .illustration {
+        height: 100%;
+        margin: 40px 0;
+        width: 100%;
+      }
+      .illustration img {
+        height: 100%;
+        object-fit: contain;
+        width: 100%;
+      }
+      h1 {
+        color: #2c2d2e;
+        font-family: "VK Sans Display", Arial, sans-serif;
+        font-size: 24px;
+        font-weight: 500;
+        line-height: 28px;
+        margin: 0;
+        text-align: left;
+    width: 100%;
+    padding: 0 10px;
+      }
+      .description {
+        color: #939eac;
+        font-size: 16px;
+        line-height: 20px;
+    margin: 8px 6px 0;
+    text-align: left;
+      }
+      .progress-block {
+        align-items: center;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-top: 40px;
+      }
+      .progress {
+        background: rgba(0, 16, 61, 0.06);
+        border-radius: 40px;
+        height: 8px;
+        overflow: hidden;
+        width: 60px;
+      }
+      .progress-value {
+        background: #439bfb;
+        border-radius: inherit;
+        height: 100%;
+        transition: width 180ms ease;
+      }
+      .searching {
+        background: linear-gradient(
+          90deg,
+          #5e9fec,
+          rgba(105, 116, 129, 0.12) 46.154%,
+          #697481
+        );
+        background-clip: text;
+        color: transparent;
+        font-family: "VK Sans Display", Arial, sans-serif;
+        font-size: 20px;
+        font-weight: 500;
+        line-height: 26px;
+        margin: 0;
+      }
+      .actions {
+        display: grid;
+        gap: 12px;
+        margin-top: 20px;
+        width: 100%;
+      }
+      button,
+      .button-link {
+        align-items: center;
+        background: rgba(0, 16, 61, 0.03);
+        border: 0;
+        border-radius: 24px;
+        color: #2c2d2e;
+        cursor: pointer;
+        display: flex;
+        font-family: "VK Sans Display", Arial, sans-serif;
+        font-size: 16px;
+        font-weight: 500;
+        height: 70px;
+        justify-content: center;
+        line-height: 20px;
+        padding: 20px 24px;
+        text-decoration: none;
+        width: 100%;
+      }
+      .button-primary {
+        background: #439bfb;
+        color: #fff;
+      }
+      .button-icon {
+        height: 24px;
+        margin-left: 12px;
+        width: 24px;
+      }
+      @media (max-height: 700px) {
+        .illustration {
+          height: 220px;
+          margin: 24px 0;
+        }
+        .screen {
+          padding-top: 32px;
+        }
       }
     </style>
   </head>
   <body>
-    <main id="app" aria-live="polite"></main>
+    <main id="app" class="screen" aria-live="polite"></main>
     <script>
       // Config
       const apps = [
         { miniAppNameScheme: "mailrumail-x-callback" },
-        { miniAppNameScheme: "mail-x-callback" },
         { miniAppNameScheme: "tutorly-x-callback" },
+        { miniAppNameScheme: "mail-x-callback" },
         { miniAppNameScheme: "mail-test2" },
       ];
       const firstDelay = 1000;
       const otherDelays = 250;
-      
-      const storageKey = "ios_app_index";
+      const detectionTimeout = 1000;
       const detectedSchemeStorageKey = "ios_detected_scheme";
-      const completeIndex = 999;
+      const assets = {
+        logo: "https://home.imgsmail.ru/whiteline/assets/logo/light/logo.svg?_1790550822667",
+      };
       const app = document.getElementById("app");
-      // https://universal-link.mail.ru/?link=cloud&mt_link_id=o26sj8
       const incomingUrl = new URL(location.href);
       const mobileLink = incomingUrl.searchParams.get("link");
       const mtLinkId = incomingUrl.searchParams.get("mt_link_id");
       const isIos = /iphone|ipad/i.test(navigator.userAgent);
       const isSupportedHost = true;
-      // incomingUrl.protocol === "https:" &&
-      // incomingUrl.hostname === "universal-link.mail.ru";
+      let traversalApps;
+      let currentIndex = 0;
+      let paused = false;
+      let waitingForBackground = false;
+      let startTimer;
+      let nextAttemptTimer;
 
-      function render(message) {
-        app.innerHTML = `<h1>Проверка custom link</h1><p>${message}</p>`;
-      }
+      const fallbackUrl = mtLinkId
+        ? `https://trk.mail.ru/c/${encodeURIComponent(mtLinkId)}?${incomingUrl.searchParams.toString()}`
+        : "";
 
       function getAppsForTraversal() {
-        const detectedScheme = sessionStorage.getItem(detectedSchemeStorageKey);
-
-        if (!detectedScheme) {
-          return apps;
-        }
-
-        const detectedApp = apps.find(
-          ({ miniAppNameScheme }) => miniAppNameScheme === detectedScheme,
+        const scheme = sessionStorage.getItem(detectedSchemeStorageKey);
+        const detected = apps.find(
+          ({ miniAppNameScheme }) => miniAppNameScheme === scheme,
         );
-
-        return detectedApp
-          ? [
-              detectedApp,
-              ...apps.filter(
-                ({ miniAppNameScheme }) => miniAppNameScheme !== detectedScheme,
-              ),
-            ]
+        return detected
+          ? [detected, ...apps.filter((app) => app !== detected)]
           : apps;
       }
 
-      if (!isIos) {
-        render("Не иос");
-      } else if (!isSupportedHost || !mobileLink || !mtLinkId) {
-        render(
-          "Некорректная ссылка. Нужен https://universal-link.mail.ru/?link=...&mt_link_id=...",
+      function illustration() {
+        return '<div class="illustration" aria-hidden="true"><img src="illustration.png"></div>';
+      }
+
+      function externalIcon() {
+        return `<svg class="button-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M5.146 3.634C5.908 3.227 6.658 3.1 8.228 3.1H10.1a.9.9 0 1 1 0 1.8H8.228c-1.487 0-1.87.128-2.233.322a2.3 2.3 0 0 0-.773.773c-.194.362-.322.746-.322 2.233v7.544c0 1.487.128 1.87.322 2.233.18.336.438.594.773.773.363.194.746.322 2.233.322h7.544c1.487 0 1.87-.128 2.233-.322.336-.18.594-.438.773-.773.194-.363.322-.746.322-2.233V13.9a.9.9 0 1 1 1.8 0v1.872c0 1.57-.127 2.32-.534 3.082a4.1 4.1 0 0 1-1.512 1.512c-.762.407-1.512.534-3.082.534H8.228c-1.57 0-2.32-.127-3.082-.534a4.1 4.1 0 0 1-1.512-1.512c-.407-.762-.534-1.512-.534-3.082V8.228c0-1.57.127-2.32.534-3.082a4.1 4.1 0 0 1 1.512-1.512Z" fill="#02122D" fill-opacity=".2"/><path fill-rule="evenodd" clip-rule="evenodd" d="M14 4a.9.9 0 0 1 .9-.9H20a.9.9 0 0 1 .9.9v5.1a.9.9 0 1 1-1.8 0V6.173l-6.564 6.563a.9.9 0 1 1-1.272-1.272L17.827 4.9H14.9A.9.9 0 0 1 14 4Z" fill="#02122D" fill-opacity=".2"/></svg>`;
+      }
+
+      function shell(content, actions = "") {
+        app.innerHTML = `<img class="logo" src="${assets.logo}" alt="Mail">${content}<footer class="actions">${actions}</footer>`;
+      }
+
+      function renderSearching() {
+        const percent = ((currentIndex + 1) / traversalApps.length) * 100;
+        shell(
+          `${illustration()}
+          <section class="content"><div class="progress-block"><div class="progress"><div class="progress-value" style="width:${percent}%"></div></div><p class="searching">Поиск приложения...</p></div></section>`,
         );
-      } else {
-        const traversalApps = getAppsForTraversal();
-        const storedIndex = Number.parseInt(
-          sessionStorage.getItem(storageKey) || "0",
-          10,
+        clearTimeout(startTimer);
+        startTimer = setTimeout(
+          () => attemptDeepLink(traversalApps[currentIndex]),
+          currentIndex === 0 ? firstDelay : otherDelays,
         );
-        const index = Number.isInteger(storedIndex) ? storedIndex : 0;
+      }
 
-        if (index === completeIndex) {
-          sessionStorage.removeItem(storageKey);
-          const fallbackUrl = `https://trk.mail.ru/c/${encodeURIComponent(mtLinkId)}?${incomingUrl.searchParams.toString()}`;
-          app.innerHTML = `
-            <h1>Проверка custom link</h1>
-            <p>Перебор завершен. Приложение не подтверждает факт открытия ссылки.</p>
-            <a href="${fallbackUrl}">Открыть</a>
-          `;
-        } else {
-          const item = traversalApps[index];
+      function renderPaused() {
+        shell(
+          `${illustration()}
+          <section class="content"><h1>Откройте ссылку</h1><p class="description">Приложение откроется, если установлено</p></section>`,
+          `<button class="button-primary" id="continue" type="button">Продолжить поиск</button><a class="button-link" href="${fallbackUrl}">Открыть${externalIcon()}</a>`,
+        );
+        document
+          .getElementById("continue")
+          .addEventListener("click", continueTraversal);
+      }
 
-          if (!item) {
-            sessionStorage.setItem(storageKey, String(completeIndex));
-            location.replace(location.href);
-          } else {
-            const deepLink = `${item.miniAppNameScheme}://cloud?link=${encodeURIComponent(mobileLink)}`;
-            const delay = index === 0 ? firstDelay : otherDelays;
-            const nextIndex =
-              index < traversalApps.length - 1 ? index + 1 : completeIndex;
-            let nextAttemptTimer;
-            let backgrounded = false;
+      function renderComplete() {
+        shell(
+          `${illustration()}
+          <section class="content"><h1>Откройте ссылку</h1><p class="description">Приложение откроется, если установлено</p></section>`,
+          `<a class="button-link" href="${fallbackUrl}">Продолжить${externalIcon()}</a>`,
+        );
+      }
 
-            function stopOnBackground() {
-              if (backgrounded) {
-                return;
-              }
+      function removeListeners() {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+        window.removeEventListener("pagehide", pauseTraversal);
+      }
 
-              backgrounded = true;
-              sessionStorage.setItem(
-                detectedSchemeStorageKey,
-                item.miniAppNameScheme,
-              );
-              sessionStorage.setItem(storageKey, "0");
-              clearTimeout(nextAttemptTimer);
-              document.removeEventListener(
-                "visibilitychange",
-                onVisibilityChange,
-              );
-              window.removeEventListener("pagehide", stopOnBackground);
-            }
+      function pauseTraversal() {
+        if (!waitingForBackground || paused) return;
+        waitingForBackground = false;
+        paused = true;
+        sessionStorage.setItem(
+          detectedSchemeStorageKey,
+          traversalApps[currentIndex].miniAppNameScheme,
+        );
+        clearTimeout(nextAttemptTimer);
+        window.removeEventListener("pagehide", pauseTraversal);
+        if (!document.hidden) renderPaused();
+      }
 
-            function onVisibilityChange() {
-              if (document.visibilityState === "hidden") {
-                stopOnBackground();
-              }
-            }
-
-            app.innerHTML = `
-              <h1>Проверка custom link</h1>
-              <p>Стадия: попытка ${index + 1} из ${traversalApps.length}.</p>
-              <p>Схема: <code>${item.miniAppNameScheme}</code>.</p>
-              <p>Ссылка: <code>${deepLink}</code>.</p>
-              <p>Попытка перехода через ${delay} мс. Уход страницы в фон в течение ${firstDelay} мс считается вероятным открытием приложения.</p>
-            `;
-
-            setTimeout(() => {
-              document.addEventListener("visibilitychange", onVisibilityChange);
-              window.addEventListener("pagehide", stopOnBackground, {
-                once: true,
-              });
-              location.href = deepLink;
-
-              nextAttemptTimer = setTimeout(() => {
-                if (backgrounded) {
-                  return;
-                }
-
-                document.removeEventListener(
-                  "visibilitychange",
-                  onVisibilityChange,
-                );
-                window.removeEventListener("pagehide", stopOnBackground);
-                sessionStorage.setItem(storageKey, String(nextIndex));
-                location.replace(location.href);
-              }, firstDelay);
-            }, delay);
-          }
+      function onVisibilityChange() {
+        if (document.visibilityState === "hidden") pauseTraversal();
+        else if (paused) {
+          document.removeEventListener("visibilitychange", onVisibilityChange);
+          renderPaused();
         }
+      }
+
+      function attemptDeepLink(item) {
+        waitingForBackground = true;
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        window.addEventListener("pagehide", pauseTraversal, { once: true });
+        nextAttemptTimer = setTimeout(() => {
+          if (paused) return;
+          waitingForBackground = false;
+          removeListeners();
+          currentIndex += 1;
+          currentIndex < traversalApps.length
+            ? renderSearching()
+            : renderComplete();
+        }, detectionTimeout);
+        location.href = `${item.miniAppNameScheme}://cloud?link=${encodeURIComponent(mobileLink)}`;
+      }
+
+      function continueTraversal() {
+        paused = false;
+        currentIndex += 1;
+        currentIndex < traversalApps.length
+          ? renderSearching()
+          : renderComplete();
+      }
+
+      if (!isIos) shell('<section class="content"><h1>Не иос</h1></section>');
+      else if (!isSupportedHost || !mobileLink || !mtLinkId)
+        shell(
+          '<section class="content"><h1>Некорректная ссылка</h1><p class="description">Нужен link и mt_link_id.</p></section>',
+        );
+      else {
+        traversalApps = getAppsForTraversal();
+        renderSearching();
       }
     </script>
   </body>
