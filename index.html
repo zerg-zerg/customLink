@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>iOS Custom Link Checker</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        padding: 24px;
+      }
+
+      main {
+        margin: 0 auto;
+        max-width: 640px;
+      }
+
+      code {
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app" aria-live="polite"></main>
+    <script>
+      // Config
+      const apps = [
+        { miniAppNameScheme: "mailrumail-x-callback" },
+        { miniAppNameScheme: "mail-x-callback" },
+        { miniAppNameScheme: "tutorly-x-callback" },
+        { miniAppNameScheme: "mail-test2" },
+      ];
+      const firstDelay = 1000;
+      const otherDelays = 250;
+      
+      const storageKey = "ios_app_index";
+      const detectedSchemeStorageKey = "ios_detected_scheme";
+      const completeIndex = 999;
+      const app = document.getElementById("app");
+      // https://universal-link.mail.ru/?link=cloud&mt_link_id=o26sj8
+      const incomingUrl = new URL(location.href);
+      const mobileLink = incomingUrl.searchParams.get("link");
+      const mtLinkId = incomingUrl.searchParams.get("mt_link_id");
+      const isIos = /iphone|ipad/i.test(navigator.userAgent);
+      const isSupportedHost = true;
+      // incomingUrl.protocol === "https:" &&
+      // incomingUrl.hostname === "universal-link.mail.ru";
+
+      function render(message) {
+        app.innerHTML = `<h1>Проверка custom link</h1><p>${message}</p>`;
+      }
+
+      function getAppsForTraversal() {
+        const detectedScheme = sessionStorage.getItem(detectedSchemeStorageKey);
+
+        if (!detectedScheme) {
+          return apps;
+        }
+
+        const detectedApp = apps.find(
+          ({ miniAppNameScheme }) => miniAppNameScheme === detectedScheme,
+        );
+
+        return detectedApp
+          ? [
+              detectedApp,
+              ...apps.filter(
+                ({ miniAppNameScheme }) => miniAppNameScheme !== detectedScheme,
+              ),
+            ]
+          : apps;
+      }
+
+      if (!isIos) {
+        render("Не иос");
+      } else if (!isSupportedHost || !mobileLink || !mtLinkId) {
+        render(
+          "Некорректная ссылка. Нужен https://universal-link.mail.ru/?link=...&mt_link_id=...",
+        );
+      } else {
+        const traversalApps = getAppsForTraversal();
+        const storedIndex = Number.parseInt(
+          sessionStorage.getItem(storageKey) || "0",
+          10,
+        );
+        const index = Number.isInteger(storedIndex) ? storedIndex : 0;
+
+        if (index === completeIndex) {
+          sessionStorage.removeItem(storageKey);
+          const fallbackUrl = `https://trk.mail.ru/c/${encodeURIComponent(mtLinkId)}?${incomingUrl.searchParams.toString()}`;
+          app.innerHTML = `
+            <h1>Проверка custom link</h1>
+            <p>Перебор завершен. Приложение не подтверждает факт открытия ссылки.</p>
+            <a href="${fallbackUrl}">Открыть</a>
+          `;
+        } else {
+          const item = traversalApps[index];
+
+          if (!item) {
+            sessionStorage.setItem(storageKey, String(completeIndex));
+            location.replace(location.href);
+          } else {
+            const deepLink = `${item.miniAppNameScheme}://cloud?link=${encodeURIComponent(mobileLink)}`;
+            const delay = index === 0 ? firstDelay : otherDelays;
+            const nextIndex =
+              index < traversalApps.length - 1 ? index + 1 : completeIndex;
+            let nextAttemptTimer;
+            let backgrounded = false;
+
+            function stopOnBackground() {
+              if (backgrounded) {
+                return;
+              }
+
+              backgrounded = true;
+              sessionStorage.setItem(
+                detectedSchemeStorageKey,
+                item.miniAppNameScheme,
+              );
+              sessionStorage.setItem(storageKey, "0");
+              clearTimeout(nextAttemptTimer);
+              document.removeEventListener(
+                "visibilitychange",
+                onVisibilityChange,
+              );
+              window.removeEventListener("pagehide", stopOnBackground);
+            }
+
+            function onVisibilityChange() {
+              if (document.visibilityState === "hidden") {
+                stopOnBackground();
+              }
+            }
+
+            app.innerHTML = `
+              <h1>Проверка custom link</h1>
+              <p>Стадия: попытка ${index + 1} из ${traversalApps.length}.</p>
+              <p>Схема: <code>${item.miniAppNameScheme}</code>.</p>
+              <p>Ссылка: <code>${deepLink}</code>.</p>
+              <p>Попытка перехода через ${delay} мс. Уход страницы в фон в течение ${firstDelay} мс считается вероятным открытием приложения.</p>
+            `;
+
+            setTimeout(() => {
+              document.addEventListener("visibilitychange", onVisibilityChange);
+              window.addEventListener("pagehide", stopOnBackground, {
+                once: true,
+              });
+              location.href = deepLink;
+
+              nextAttemptTimer = setTimeout(() => {
+                if (backgrounded) {
+                  return;
+                }
+
+                document.removeEventListener(
+                  "visibilitychange",
+                  onVisibilityChange,
+                );
+                window.removeEventListener("pagehide", stopOnBackground);
+                sessionStorage.setItem(storageKey, String(nextIndex));
+                location.replace(location.href);
+              }, firstDelay);
+            }, delay);
+          }
+        }
+      }
+    </script>
+  </body>
+</html>
